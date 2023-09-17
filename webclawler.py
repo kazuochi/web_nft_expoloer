@@ -1,81 +1,83 @@
 import os
-import requests
 from bs4 import BeautifulSoup
 from selenium import webdriver
 from collections import deque
-from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 import time
-from selenium.webdriver.support.ui import Select
 
-# First create screenshots directory if it doesn't exist
-if not os.path.exists('screenshots'):
-    os.makedirs('screenshots')
+# Constants
+SCREENSHOTS_DIR = 'screenshots'
+INITIAL_URL = "?id=e744528e2ca1556e16a28088b7b290c2"
+BASE_URL = "https://web.leegte.org/"
+MAX_IDS = 1000
 
-# Setup webdriver (this is for Firefox, but you can use Chrome or others)
+# Create screenshots directory if it doesn't exist
+if not os.path.exists(SCREENSHOTS_DIR):
+    os.makedirs(SCREENSHOTS_DIR)
+
+# Setup webdriver
 driver = webdriver.Chrome(service=Service('./chromedriver'))
 
-# Use a queue to avoid stack overflow from recursion
-queue = deque(["?id=bef14019056992a29a863b717e0d815f"])
-IDs = set()  # Use a set to avoid duplicate IDs
+# Initialize the queue and IDs set
+queue = deque([INITIAL_URL])
+IDs = set()
 
-while queue and len(IDs) < 1000:
-    id_ = queue.pop()
-    url = "https://web.leegte.org/" + id_
-    IDs.add(id_)  # add the id to the IDs set
-    
-    driver.get(url)
+
+def handle_links():
     html = driver.page_source
     soup = BeautifulSoup(html, 'html.parser')
-    
-    # Save the screenshot
-    driver.save_screenshot(f'screenshots/{id_[4:]}.png')  # Save screenshot with ID as name
-    
-    # Extract all links with IDs on this page
     links = soup.find_all('a', href=True)
-
     for link in links:
         href = link['href']
-        # check if the link is already visited by looking into the IDs set 
         if href.startswith("?id=") and href not in IDs:
             queue.append(href)
-    
-    # Handle dropdown
+
+
+def handle_dropdowns():
+    processed_dropdowns = set()
     dropdown_index = 0
+
     while True:
         dropdown_elements = driver.find_elements(By.TAG_NAME, "select")
-    
-        # Break out of the loop if we've processed all dropdowns
+
         if dropdown_index >= len(dropdown_elements):
-            break
-    
+            break  # No more dropdowns to process
+
         dropdown = dropdown_elements[dropdown_index]
-        original_url = driver.current_url  # Remember the original URL
-        options = dropdown.find_elements(By.TAG_NAME, "option")
+        dropdown_outerHTML = dropdown.get_attribute('outerHTML')
+
+        if dropdown_outerHTML not in processed_dropdowns:
+            original_url = driver.current_url  # Remember the original URL
+            options = dropdown.find_elements(By.TAG_NAME, "option")
     
-        # Click on the first non-selected option
-        for option in options:
-            if not option.is_selected():
-                option.click()
-                time.sleep(2)
-            
-                current_url = driver.current_url
-                current_id = "?id=" + current_url.rsplit('=', 1)[-1]
-                if current_id not in IDs:
-                    print("ID added from dropdown.")
-                    queue.append(current_id)
-                    IDs.add(current_id)
-            
-                # Navigate back to the original page
-                driver.get(original_url)
-                time.sleep(2)
-                break  # break after clicking one option, as we need to refetch the dropdown and its options
+            # Click on the first non-selected option
+            for option in options:
+                if not option.is_selected():
+                    option.click()
+                    time.sleep(2)
+                
+                    current_url = driver.current_url
+                    current_id = "?id=" + current_url.rsplit('=', 1)[-1]
+                    if current_id not in IDs:
+                        print("ID added from dropdown.")
+                        queue.append(current_id)
+                        IDs.add(current_id)
+                
+                    # Navigate back to the original page
+                    driver.get(original_url)
+                    time.sleep(2)
+                    break  # break after clicking one option
     
-        # Move on to the next dropdown
+            # Mark this dropdown as processed
+            processed_dropdowns.add(dropdown_outerHTML)
+
         dropdown_index += 1
 
-    # Handle radio buttons
+
+
+
+def handle_radio_buttons():
     processed_divs = set()
     radio_index = 0
 
@@ -121,11 +123,103 @@ while queue and len(IDs) < 1000:
 
 
 
+def handle_text_fields():
+    processed_inputs = set()  # To keep track of text fields that have been clicked
+
+    while True:  # Continue until no input fields are left to handle
+        input_elements = driver.find_elements(By.CSS_SELECTOR, 'div.container input[type="text"]')
+
+        if not input_elements:
+            break  # If no input fields are left, exit the loop
+
+        # Filter out already clicked input fields
+        input_elements = [inp for inp in input_elements if inp.get_attribute('outerHTML') not in processed_inputs]
+
+        if not input_elements:
+            break  # If all input fields on the page have been clicked, exit the loop
+
+        input_field = input_elements[0]  # Interact with the first unclicked input field
+        original_url = driver.current_url  # Remember the current URL before interaction
+        outerHTML = input_field.get_attribute('outerHTML')
+        
+        try:
+            driver.execute_script("arguments[0].click();", input_field)
+            time.sleep(2)
+
+            current_url = driver.current_url
+            current_id = "?id=" + current_url.rsplit('=', 1)[-1]
+            if current_id not in IDs:
+                print("ID added from text field interaction.")
+                queue.append(current_id)
+                IDs.add(current_id)
+
+            # Mark this input field as processed
+            processed_inputs.add(outerHTML)
+
+            # Navigate back to the original page
+            driver.get(original_url)
+            time.sleep(2)
+        except Exception as e:
+            print(f"Failed to click text input field: {str(e)}")
+
+
+
+
+def handle_buttons():
+    processed_buttons = set()
+
+    while True:
+        button_elements = driver.find_elements(By.CSS_SELECTOR, 'div.container button')
+        button_elements = [btn for btn in button_elements if btn.get_attribute('outerHTML') not in processed_buttons]
+
+        if not button_elements:
+            break  # If all buttons on the page have been clicked, exit the loop
+
+        # Let's just reference the first button in the list
+        button = button_elements[0]
+        original_url = driver.current_url  # Remember the current URL before interaction
+        outerHTML = button.get_attribute('outerHTML')
+
+        try:
+            driver.execute_script("arguments[0].click();", button)
+            
+            current_url = driver.current_url
+            current_id = "?id=" + current_url.rsplit('=', 1)[-1]
+            if current_id not in IDs:
+                print("ID added from button click.")
+                queue.append(current_id)
+                IDs.add(current_id)
+
+            processed_buttons.add(outerHTML)
+            
+            # Navigate back to the original page
+            driver.get(original_url)
+            time.sleep(2)
+        except Exception as e:
+            print(f"Failed to click button: {str(e)}")
+
+
+
+
+
+while queue and len(IDs) < MAX_IDS:
+    id_ = queue.pop()
+    driver.get(BASE_URL + id_)
+    IDs.add(id_)
+
+    # Save the screenshot
+    driver.save_screenshot(f'{SCREENSHOTS_DIR}/{id_[4:]}.png')
+
+    handle_links()
+    handle_dropdowns()
+    handle_radio_buttons()
+    handle_buttons()
+    handle_text_fields()
+
 # Save IDs to a file
 with open('ids.txt', 'w') as f:
     for id_ in IDs:
-        f.write(id_[4:] + '\n')  # Save ID without "?id=" part
+        f.write(id_[4:] + '\n')
 
 driver.quit()
-
 print("Done crawling!")
